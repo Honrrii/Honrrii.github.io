@@ -72,52 +72,121 @@
   let width = 0, height = 0;
   const pointer = { x: 0, y: 0, targetX: 0, targetY: 0 };
   const points = [];
-  // Fibonacci distribution forms a deterministic, evenly spaced perception field.
-  for (let i = 0; i < 1400; i++) {
-    const y = 1 - (i / 1399) * 2;
-    const radius = Math.sqrt(1 - y * y);
-    const theta = Math.PI * (3 - Math.sqrt(5)) * i;
-    points.push({ x: Math.cos(theta) * radius, y, z: Math.sin(theta) * radius, i });
+  // Synthetic surface samples, not sensor recordings or project telemetry.
+  function point(x, y, z, kind = 'arm') {
+    const jitter = Math.sin(points.length * 127.1 + 31.7) * .004;
+    points.push({x:x+jitter, y:y+jitter*.6, z:z-jitter, kind});
   }
-  function render() {
-    if (!ctx) return;
-    ctx.clearRect(0, 0, width, height);
-    const radius = Math.min(width * .34, height * .34);
-    const cx = width * .5, cy = height * .46;
-    const rotation = time * .00009 + pointer.x * .3;
-    const tilt = -.27 + pointer.y * .22;
-    const cr = Math.cos(rotation), sr = Math.sin(rotation), ct = Math.cos(tilt), st = Math.sin(tilt);
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(-.35);
-    ctx.strokeStyle = '#718abd24';
-    ctx.lineWidth = .7;
-    ctx.beginPath();ctx.ellipse(0, 0, radius * 1.36, radius * .36, 0, 0, Math.PI * 2);ctx.stroke();
-    ctx.beginPath();ctx.ellipse(0, 0, radius * 1.48, radius * .4, 0, .3, 2.9);ctx.stroke();
-    ctx.restore();
-    const projected = points.map(point => {
-      const ripple = 1 + .042 * Math.sin(point.y * 8 + time * .0007);
-      const x = point.x * cr - point.z * sr;
-      const rz = point.x * sr + point.z * cr;
-      const y = point.y * ct - rz * st;
-      const z = point.y * st + rz * ct;
-      const perspective = 3.6 / (3.6 - z);
-      return { x: cx + x * radius * perspective * ripple, y: cy + y * radius * perspective * ripple, z, i: point.i };
-    }).sort((a, b) => a.z - b.z);
-    projected.forEach(point => {
-      const depth = (point.z + 1) / 2;
-      ctx.fillStyle = `rgba(${Math.round(93 + depth * 82)},${Math.round(129 + depth * 66)},255,${.12 + depth * .8})`;
-      ctx.beginPath();ctx.arc(point.x, point.y, .6 + depth * .75, 0, Math.PI * 2);ctx.fill();
-    });
-    ctx.strokeStyle = '#698cd129';
-    ctx.lineWidth = .6;
-    for (let i = 0; i < projected.length; i += 17) {
-      const a = projected[i];
-      if (a.z < .15) continue;
-      const b = projected[(i + 19) % projected.length];
-      if (Math.hypot(a.x - b.x, a.y - b.y) < radius * .28) {
-        ctx.beginPath();ctx.moveTo(a.x, a.y);ctx.lineTo(b.x, b.y);ctx.stroke();
+  function cylinder(a, b, radius, kind = 'arm', rings = 18, samples = 30) {
+    const direction = b.map((v,i)=>v-a[i]);
+    const length = Math.hypot(...direction);
+    const n = direction.map(v=>v/length);
+    const ref = Math.abs(n[1])<.9 ? [0,1,0] : [1,0,0];
+    const cross = (u,v)=>[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+    let u = cross(n,ref);
+    const magnitude = Math.hypot(...u);
+    u=u.map(v=>v/magnitude);
+    const v=cross(n,u);
+    for(let row=0;row<=rings;row++) for(let col=0;col<samples;col++) {
+      const angle=col/samples*Math.PI*2;
+      point(...a.map((value,axis)=>value+direction[axis]*row/rings+radius*(u[axis]*Math.cos(angle)+v[axis]*Math.sin(angle))),kind);
+    }
+    for(const end of [a,b]) for(let r=0;r<4;r++) for(let col=0;col<samples;col++) {
+      const angle=col/samples*Math.PI*2;
+      point(...end.map((value,axis)=>value+radius*r/4*(u[axis]*Math.cos(angle)+v[axis]*Math.sin(angle))),kind);
+    }
+  }
+  function box(center,size,kind) {
+    for(let axis=0;axis<3;axis++) for(const side of [-1,1]) {
+      const u=(axis+1)%3,v=(axis+2)%3;
+      const rows=Math.ceil(size[u]/.055),cols=Math.ceil(size[v]/.055);
+      for(let row=0;row<=rows;row++) for(let col=0;col<=cols;col++) {
+        const p=[...center];
+        p[axis]+=side*size[axis]/2;p[u]+=(row/rows-.5)*size[u];p[v]+=(col/cols-.5)*size[v];
+        point(...p,kind);
       }
+    }
+  }
+  const shoulder=[-.85,.52,0],elbow=[-1.03,1.63,0],wrist=[.38,1.95,0],tool=[.87,1.38,0];
+  cylinder([-.85,0,0],[-.85,.18,0],.36,'joint',5,38);
+  cylinder([-.85,.18,0],shoulder,.20,'arm',9);
+  cylinder(shoulder,elbow,.145,'arm',26);
+  cylinder(elbow,wrist,.125,'arm',31);
+  cylinder(wrist,tool,.095,'arm',17);
+  for(const [joint,radius] of [[shoulder,.23],[elbow,.22],[wrist,.17]]) {
+    cylinder([joint[0],joint[1],-.17],[joint[0],joint[1],.17],radius,'joint',8,34);
+  }
+  box([.87,1.30,0],[.32,.15,.22],'joint');
+  box([.72,1.13,0],[.065,.25,.10],'arm');
+  box([1.02,1.13,0],[.065,.25,.10],'arm');
+  box([.77,1.015,0],[.12,.055,.10],'arm');
+  box([.97,1.015,0],[.12,.055,.10],'arm');
+  box([.87,.20,0],[.38,.40,.38],'target');
+  for(let x=-1.8;x<=1.8;x+=.105) for(let z=-1;z<=1;z+=.105) point(x,-.025,z,'table');
+  const colors={arm:[130,163,255],joint:[172,207,255],target:[115,224,203],table:[80,110,158]};
+  function render() {
+    if(!ctx) return;
+    ctx.clearRect(0,0,width,height);
+    const scale=Math.min(width/5.2,(height-145)/3.6);
+    const yaw=-.36+Math.sin(time*.00014)*.055+pointer.x*.65;
+    const pitch=.31+pointer.y*.22;
+    const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+    function project(x,y,z) {
+      const rx=x*cy+z*sy,rz=-x*sy+z*cy;
+      const depth=rz*cp-(y-.85)*sp,perspective=7/(7+depth);
+      return {x:width*.5+rx*scale*perspective,y:height*.43-((y-.85)*cp+rz*sp)*scale*perspective,depth};
+    }
+    function line(a,b,color,dashed=false) {
+      const start=project(...a),end=project(...b);
+      ctx.strokeStyle=color;ctx.lineWidth=.7;ctx.setLineDash(dashed?[3,5]:[]);
+      ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.lineTo(end.x,end.y);ctx.stroke();ctx.setLineDash([]);
+    }
+    // Coordinate grid and workbench edge ground the arm in a shared frame.
+    for(let x=-1.8;x<=1.81;x+=.45) line([x,-.035,-1],[x,-.035,1],'#637ba72c');
+    for(let z=-1;z<=1.01;z+=.4) line([-1.8,-.035,z],[1.8,-.035,z],'#637ba72c');
+    for(const z of [-1,1]) line([-1.8,-.035,z],[1.8,-.035,z],'#789ac459');
+    for(const x of [-1.8,1.8]) line([x,-.035,-1],[x,-.035,1],'#789ac459');
+    // The seven-second scan brightens returns without hiding the scene.
+    const sweep=-1.8+((time/7000+.32)%1)*3.6;
+    const plane=[[sweep,0,-1],[sweep,2.35,-1],[sweep,2.35,1],[sweep,0,1]].map(p=>project(...p));
+    ctx.fillStyle='#86bdff06';ctx.strokeStyle='#92bdff22';ctx.lineWidth=.7;
+    ctx.beginPath();plane.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();ctx.stroke();
+    line([sweep,0,-1],[sweep,0,1],'#b5d9ffa0');
+    const projected=points.map(p=>({...project(p.x,p.y,p.z),p})).sort((a,b)=>b.depth-a.depth);
+    projected.forEach(({x,y,depth,p})=>{
+      const scan=Math.max(0,1-Math.abs(p.x-sweep)/.24);
+      const front=Math.max(.2,Math.min(1,.65-depth*.22));
+      const alpha=p.kind==='table'?.18+scan*.5:.30+front*.42+scan*.28;
+      const [r,g,b]=colors[p.kind];
+      ctx.fillStyle=`rgba(${Math.round(r+(255-r)*scan*.7)},${Math.round(g+(255-g)*scan*.7)},${b},${alpha})`;
+      const size=p.kind==='table'?.85:(width<400?.8:1)+scan*.45;
+      ctx.fillRect(x-size/2,y-size/2,size,size);
+    });
+    // Target bounds and dashed tool axis illustrate the perception task.
+    const lo=[.59,.015,-.28],hi=[1.15,.50,.28];
+    for(let axis=0;axis<3;axis++) {
+      const u=(axis+1)%3,v=(axis+2)%3;
+      for(const su of [0,1]) for(const sv of [0,1]) {
+        const a=[...lo],b=[...lo];
+        a[u]=b[u]=su?hi[u]:lo[u];a[v]=b[v]=sv?hi[v]:lo[v];b[axis]=hi[axis];
+        line(a,b,'#80dbc36b');
+      }
+    }
+    line([.87,.52,0],[.87,.97,0],'#80dbc377',true);
+    function callout(anchor,text,dx,dy,color) {
+      const p=project(...anchor);
+      ctx.font=`${width<400?9:10}px "IBM Plex Mono",monospace`;
+      ctx.fillStyle=color;ctx.strokeStyle=color;ctx.lineWidth=.6;
+      const endX=p.x+dx,endY=p.y+dy;
+      ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(endX,endY);ctx.lineTo(endX+(dx<0?-12:12),endY);ctx.stroke();
+      ctx.textAlign=dx<0?'right':'left';ctx.fillText(text,endX+(dx<0?-16:16),endY+3);
+    }
+    callout(elbow,'ARM / 01',-scale*.14,-scale*.36,'#b8caf0');
+    callout([1.15,.25,.28],'TARGET',scale*.15,-scale*.34,'#9de2d1');
+    const origin=[width-49,height-98];
+    ctx.font='9px "IBM Plex Mono",monospace';ctx.textAlign='center';
+    for(const [dx,dy,label,color] of [[21,7,'X','#a1b8f3'],[-15,12,'Z','#8292b5'],[0,-23,'Y','#8bd8c4']]) {
+      ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(...origin);ctx.lineTo(origin[0]+dx,origin[1]+dy);ctx.stroke();ctx.fillText(label,origin[0]+dx*1.4,origin[1]+dy*1.4+3);
     }
   }
   function tick(now) {
